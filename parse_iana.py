@@ -71,7 +71,7 @@ def write_to_txt_file(port_protocol, protocols, port_ranges):
 def write_c_header(port_ranges, protocols):
     with open(C_HEADER_FILE, 'w', encoding='utf-8') as f_header:
         sys.stdout = f_header
-        write_definitions(protocols)
+        write_definitions(protocols, port_ranges)
 
         write_definitions_port_range(port_ranges)
     f_header.close()
@@ -99,7 +99,7 @@ def write_definitions_port_range(port_ranges):
     print('#endif')
 
 
-def write_definitions(protocols):
+def write_definitions(protocols, port_ranges):
     counter = 1
     print('#ifndef TPI_IANA_HEADER_H_')
     print('#define TPI_IANA_HEADER_H_')
@@ -114,6 +114,9 @@ def write_definitions(protocols):
     print("#define TPI_NUMBER_OF_PROTOCOLS " +
           str(len(protocols) + 1))
     print()
+
+    print("#define TPI_NUMBER_OF_PORT_INTERVAL " +
+          str(len(port_ranges) + 1))
 
     print('#define TPI_IANA_TRANSPORT_PROTOCOL_INIT { ', end='')
     for protocol in protocols:

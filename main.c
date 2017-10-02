@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <signal.h>
+#include <regex.h>
 
 #include "tpi_definitions.h"
 
@@ -89,6 +90,85 @@ static int socket_init(void)
     return 0;
 }
 
+static int is_invalid_request(const char *buffer)
+{
+    regex_t regex;
+
+    if (regcomp(&regex, TPI_REGEXP_VALIDATION, REG_EXTENDED))
+        return -1;
+
+    if (regexec(&regex, buffer, 0, NULL, 0))
+        return -1;
+
+    return 0;
+}
+
+static int is_in_between_port_range(const char *buffer,
+                                    int port,
+                                    const char *prot,
+                                    char *serv_name)
+{
+    int i;
+    unsigned int prot_id = 0;
+    int found = 0;
+
+    for (i = 0; prot_initial[i].initial; i++) {
+        if (0 == strcmp(prot, prot_initial[i].initial)) {
+            prot_id = prot_initial[i].prot;
+            found = 1;
+            break;
+        }
+    }
+
+    if (!found)
+        return 0;
+
+    for (i = 0; port_interval[i].min_port != UINT_MAX; i++) {
+        if ((port >= port_interval[i].min_port)
+            && (port <= port_interval[i].max_port)) {
+            if (prot_id & port_interval[i].prot) {
+                serv_name = strdup(port_interval[i].serv_name);
+                return 1;
+            }
+        }
+    }
+}
+
+static ssize_t none_response(struct sockaddr_un *addr_cli)
+{
+    return sendto(sock,
+                  "None",
+                  sizeof("None"),
+                  0,
+                  (struct sockaddr *) addr_cli,
+                  sizeof(struct sockaddr_un));
+}
+
+static ssize_t confirm_response(struct sockaddr_un *addr_cli,
+                                char *serv_name,
+                                char confirmation)
+{
+    if (NULL == serv_name)
+        return none_response(addr_cli);
+
+    if ('-' == confirmation) {
+        char buffer[100];
+        sprintf(buffer, "1/%s", serv_name);
+        return sendto(sock,
+                      buffer,
+                      strlen(buffer) + 1,
+                      0,
+                      (struct sockaddr *) addr_cli,
+                      sizeof(struct sockaddr_un));
+    }
+
+    return sendto(sock,
+                  serv_name,
+                  strlen(serv_name) + 1,
+                  0, (struct sockaddr *) addr_cli,
+                  sizeof(struct sockaddr_un));
+}
+
 static int service_init(struct rbtree *tree)
 {
     char *content = NULL;
@@ -140,8 +220,97 @@ static int service_init(struct rbtree *tree)
     return 0;
 }
 
+static int set_transport_protocol(char *prot,
+                                  struct tpi_prot_serv_name *data)
+{
+    int i;
+
+    for (i = 0; prot_initial[i].initial; i++) {
+        if (0 == strcmp(prot, prot_initial[i].initial)) {
+            data->prot |= prot_initial[i].prot;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int prot_cmp(struct tpi_prot_serv_name *a,
+                    struct tpi_prot_serv_name *b)
+{
+    if (a->prot & b->prot)
+        return 0;
+    return 1;
+}
+
 static int tpi_loop(struct rbtree *tree)
 {
+    int sun_size = sizeof(struct sockaddr_un);
+
+    while (!stop) {
+        char buffer[100];
+        struct tpi_node node;
+        struct tpi_prot_serv_name *node_tmp = NULL;
+        struct sockaddr_un addr_cli;
+
+        bzero(buffer, sizeof(buffer));
+
+        recvfrom(sock,
+                 buffer,
+                 sizeof(buffer),
+                 0,
+                 (struct sockaddr *) &addr_cli,
+                 (socklen_t *) &sun_size);
+
+        if (is_invalid_request(buffer)) {
+            none_response(&addr_cli);
+            continue;
+        }
+
+        char *p = buffer;
+        char *cursor = strsep(&p, "/");
+        char *prot = p;
+
+        if ('-' == buffer[0])
+            cursor++;
+
+        int port = atoi(cursor);
+
+        node.port = port;
+
+        struct rbtree_node *node_found = rbtree_lookup(&node.node, tree);
+
+        if (!node_found) {
+            char *serv_name = NULL;
+            int ret = is_in_between_port_range(buffer, port, prot, serv_name);
+
+            if (ret)
+                confirm_response(&addr_cli, serv_name, buffer[0]);
+            else
+                none_response(&addr_cli);
+            free(serv_name);
+            continue;
+        }
+
+        struct tpi_node *ret = rbtree_container_of(node_found, struct tpi_node, node);
+
+        struct tpi_prot_serv_name node_to_search;
+        bzero(&node_to_search, sizeof(node_to_search));
+        int found = set_transport_protocol(p, &node_to_search);
+
+        if (!found) {
+            none_response(&addr_cli);
+            continue;
+        }
+
+        LL_SEARCH(ret->list, node_tmp, &node_to_search, prot_cmp);
+
+        if (NULL != node_tmp) {
+            confirm_response(&addr_cli, node_tmp->serv_name, buffer[0]);
+            continue;
+        }
+        none_response(&addr_cli);
+    }
+
     return 0;
 }
 
