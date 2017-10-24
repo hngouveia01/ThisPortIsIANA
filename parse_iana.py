@@ -89,12 +89,12 @@ def write_definitions_port_range(port_ranges):
         print(max_port[0] + ', ', end='')
         # TCP[0]>X11[1]
         protocol = max_port[1].split('>')
-        print('TPI_IANA_PORTOCOL_' + protocol[0] + ', ', end='')
+        print('TPI_IANA_PROTOCOL_' + protocol[0] + ', ', end='')
         # X11[0]'\n'[1]
         service_name = protocol[1].split('\n')
         print('\"' + service_name[0] + '\"', end='')
         print(' }, \\')
-    print('\t\t\t{ -1. -1. INT_MAX, NULL } \\')
+    print('\t\t\t{ -1., -1., INT_MAX, NULL } \\')
     print('\t\t}')
     print('#endif')
 
